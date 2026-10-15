@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>EcoCatador - Jogo Ecológico</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: #1b2e1b; font-family: Arial, Helvetica, sans-serif; color: #fff;
+  }
+  #container { position: relative; width: min(96vw, 800px); }
+  canvas {
+    width: 100%; height: auto; display: block; border-radius: 12px;
+    box-shadow: 0 0 25px rgba(0,0,0,.5); touch-action: none; cursor: pointer;
+  }
+  .overlay {
+    position: absolute; inset: 0; border-radius: 12px; background: rgba(0,0,0,.75);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 20px; text-align: center;
+  }
+  .hidden { display: none !important; }
+  h1 { margin: 0 0 8px; color: #8bc34a; }
+  p { margin: 6px 0; line-height: 1.4; max-width: 600px; }
+  .btn {
+    margin: 6px; padding: 12px 20px; border: none; border-radius: 10px;
+    background: #43a047; color: #fff; font-size: 16px; font-weight: bold; cursor: pointer;
+  }
+  .btn:hover { background: #2e7d32; }
+  .card { background: #fff; color: #222; border-radius: 14px; padding: 18px; width: min(90%, 420px); }
+  .card h2 { margin: 0 0 10px; color: #2e7d32; font-size: 20px; }
+  .opt {
+    display: block; width: 100%; margin: 6px 0; background: #e8f5e9;
+    color: #1b5e20; border: 2px solid #81c784;
+  }
+  .opt:hover { background: #c8e6c9; }
+  .opt:disabled { cursor: default; }
+  .feedback { font-weight: bold; min-height: 24px; margin-top: 8px; }
+  .good { color: #2e7d32; }
+  .bad { color: #c62828; }
+  #help { font-size: 13px; opacity: .8; }
+</style>
+</head>
+<body>
+
+  <canvas id="game" width="800" height="500"></canvas>
+
+  
+    <h1>🌍 EcoCatador</h1>
+    O **Poluidor** joga lixo do alto. Você é o **Eco-herói** e precisa recolher o lixo antes que a poluição tome conta do ambiente!
+
+
+    ♻️ Lixo coletado = pontos  ·  🎁 Cartas bônus  ·  ❓ Cartas de matemática
+
+
+    Controles: ← → / A D ou mouse/toque · P pausa
+
+
+    <button class="btn" id="startBtn">Começar</button>
+  
+
+
+
+  
+    
+      <h2>❓ Carta de Pergunta</h2>
+      
+
+
+      
+
+
+      
+
+
+    
+
+
+  
+
+
+
+  
+    <h1>Fim de jogo!</h1>
+    
+
+
+    <button class="btn" id="restartBtn">Jogar novamente</button>
+  
+
+
+
+
+
+
+<script>
+(() => {
+'use strict';
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+const GROUND = H - 40;
+const $ = id => document.getElementById(id);
+
+const rnd = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+/* ====== CONFIGURAÇÃO DO CONTEÚDO (edite aqui à vontade) ====== */
+const TRASH = [
+  { nome: 'Garrafa PET',      tipo: 'Plástico', icon: '🍾' },
+  { nome: 'Lata de alumínio', tipo: 'Metal',    icon: '🥫' },
+  { nome: 'Jornal',           tipo: 'Papel',    icon: '📰' },
+  { nome: 'Casca de banana',  tipo: 'Orgânico', icon: '🍌' },
+  { nome: 'Pote de vidro',    tipo: 'Vidro',    icon: '🫙' },
+  { nome: 'Sacola plástica',  tipo: 'Plástico', icon: '🛍️' }
+];
+
+const BONUS = [
+  { id: 'escudo',  nome: 'Escudo Verde',    icon: '🛡️', desc: 'Protege de 1 perda de vida' },
+  { id: 'ima',     nome: 'Ímã Reciclável',  icon: '🧲', desc: 'Atrai o lixo por 6 s' },
+  { id: 'lento',   nome: 'Chuva Suave',     icon: '🌧️', desc: 'Lixo cai devagar por 6 s' },
+  { id: 'pontos',  nome: 'Mutirão',         icon: '🌱', desc: '+30 pontos' }
+];
+
+const SCENES = [
+  { nome: 'Parque da Cidade',   sky: '#9ad8ff', ground: '#6abf4b' },
+  { nome: 'Rio Poluído',        sky: '#c7c9a0', ground: '#7a9a4a' },
+  { nome: 'Praia',              sky: '#8fd8f5', ground: '#f0d890' },
+  { nome: 'Floresta Nativa',    sky: '#5d8f5d', ground: '#2d6a2d' },
+  { nome: 'Cidade Sustentável', sky: '#bfe6ff', ground: '#8a8f99' }
+];
+/* ============================================================ */
+
+let state, player, npc, items, floats, score, lives, pollution, sceneIdx;
+let throwTimer, shield, effects, banner, targetX, lastTime, time;
+let quizAtual = null, answering = false;
+const keys = {};
+
+function currentLevel() { return Math.floor(score / 100) + 1; }
+
+/* ---------- Inicialização ---------- */
+function init() {
+  score = 0; lives = 3; pollution = 0; sceneIdx = 0;
+  throwTimer = 1; shield = false; time = 0; targetX = null;
+  player = { x: W / 2, w: 100, h: 22, y: GROUND - 30, speed: 430 };
+  npc = { x: W / 2, dir: 1, speed: 90, throwAnim: 0 };
+  items = []; floats = [];
+  effects = { ima: 0, lento: 0 };
+  banner = { text: '', t: 0 };
+}
+
+function startGame() {
+  init();
+  state = 'playing';
+  $('menu').classList.add('hidden');
+  $('gameover').classList.add('hidden');
+  $('quiz').classList.add('hidden');
+  showBanner('🌳 Cena 1: ' + SCENES[0].nome);
+}
+
+function endGame() {
+  state = 'over';
+  $('finalScore').textContent = `Pontuação: ${score} · Cena alcançada: ${SCENES[sceneIdx].nome}`;
+  $('gameover').classList.remove('hidden');
+}
+
+/* ---------- Feedback visual ---------- */
+function showBanner(text) { banner = { text, t: 2.5 }; }
+function addFloat(text, x, y, color) { floats.push({ text, x, y, color, t: 1 }); }
+
+/* ---------- Vidas e poluição ---------- */
+function loseLife(motivo) {
+  if (shield) {
+    shield = false;
+    showBanner('🛡️ Escudo bloqueou: ' + motivo);
+    return;
+  }
+  lives--;
+  showBanner('💔 Você perdeu uma vida: ' + motivo);
+  if (lives <= 0) endGame();
+}
+
+function addPollution(v) {
+  pollution += v;
+  if (pollution >= 100) {
+    pollution = 50;
+    loseLife('o ambiente ficou poluído');
+  }
+}
+
+/* ---------- Bônus ---------- */
+function aplicarBonus(b) {
+  switch (b.id) {
+    case 'escudo': shield = true; showBanner('🛡️ Escudo Verde ativado!'); break;
+    case 'ima':    effects.ima = 6; showBanner('🧲 Ímã Reciclável: 6 s!'); break;
+    case 'lento':  effects.lento = 6; showBanner('🌧️ Chuva Suave: 6 s!'); break;
+    case 'pontos': score += 30; showBanner('🌱 Mutirão: +30 pontos!'); break;
+  }
+}
+
+/* ---------- Perguntas de matemática ---------- */
+function gerarPergunta() {
+  const nivel = Math.min(3, 1 + Math.floor(score / 200));
+  const m = nivel === 1 ? 10 : nivel === 2 ? 20 : 50;
+  const t = rnd(0, 3);
+  let q, r;
+
+  if (t === 0) {
+    const a = rnd(2, m), b = rnd(2, m);
+    r = a + b;
+    q = `Uma cooperativa recebeu ${a} kg de papel de manhã e ${b} kg à tarde. Quantos kg de papel foram recebidos no total?`;
+  } else if (t === 1) {
+    const a = rnd(3, m), b = rnd(1, a - 1);
+    r = a - b;
+    q = `Havia ${a} garrafas PET na praia e ${b} foram recolhidas. Quantas garrafas ainda ficaram na praia?`;
+  } else if (t === 2) {
+    const a = rnd(2, 9), b = rnd(2, 9);
+    r = a * b;
+    q = `Cada caixa de reciclagem tem ${a} latas. Se você encheu ${b} caixas, quantas latas foram recicladas?`;
+  } else {
+    const d = rnd(2, 9), e = rnd(2, 9);
+    const total = d * e;
+    r = e;
+    q = `${total} cascas de banana serão divididas igualmente em ${d} composteiras. Quantas cascas vão para cada composteira?`;
+  }
+
+  const opts = new Set([r]);
+  while (opts.size < 4) {
+    opts.add(Math.max(0, r + rnd(-5, 5)) || r + 1);
+  }
+  const arr = [...opts].sort(() => Math.random() - 0.5);
+  return { q, opts: arr, correct: r };
+}
+
+function openQuiz() {
+  state = 'quiz';
+  answering = false;
+  quizAtual = gerarPergunta();
+  $('quizText').textContent = quizAtual.q;
+  $('quizFeedback').textContent = '';
+  const box = $('quizOpts');
+  box.innerHTML = '';
+  quizAtual.opts.forEach(v => {
+    const b = document.createElement('button');
+    b.className = 'btn opt';
+    b.textContent = v;
+    b.onclick = () => answer(v);
+    box.appendChild(b);
+  });
+  $('quiz').classList.remove('hidden');
+}
+
+function answer(v) {
+  if (answering) return;
+  answering = true;
+  const fb = $('quizFeedback');
+  if (v === quizAtual.correct) {
+    score += 30;
+    pollution = Math.max(0, pollution - 10);
+    fb.textContent = '✅ Correto! +30 pontos';
+    fb.className = 'feedback good';
+  } else {
+    fb.textContent = `❌ Errado! A resposta era ${quizAtual.correct}`;
+    fb.className = 'feedback bad';
+    loseLife('resposta errada');
+  }
+  setTimeout(() => {
+    $('quiz').classList.add('hidden');
+    if (state === 'quiz') state = 'playing';
+    answering = false;
+  }, 1400);
+}
+
+/* ---------- NPC e lançamentos ---------- */
+function lancar() {
+  npc.throwAnim = 0.3;
+  const r = Math.random();
+  let it;
+  if (r < 0.10)      it = { tipo: 'quiz' };
+  else if (r < 0.22) it = { tipo: 'bonus', dados: BONUS[rnd(0, BONUS.length - 1)] };
+  else               it = { tipo: 'lixo', dados: TRASH[rnd(0, TRASH.length - 1)] };
+
+  it.x = npc.x;
+  it.y = 95;
+  it.vy = 100 + currentLevel() * 12 + rnd(0, 25);
+  it.wob = Math.random() * 6;
+  items.push(it);
+}
+
+function updateNPC(dt) {
+  const level = currentLevel();
+  npc.x += npc.dir * npc.speed * (1 + level * 0.08) * dt;
+  if (npc.x < 70)     { npc.x = 70;     npc.dir = 1; }
+  if (npc.x > W - 70) { npc.x = W - 70; npc.dir = -1; }
+  if (Math.random() < 0.004) npc.dir *= -1;
+
+  npc.throwAnim = Math.max(0, npc.throwAnim - dt);
+  throwTimer -= dt;
+  if (throwTimer <= 0) {
+    throwTimer = Math.max(0.5, 1.7 - level * 0.12) * (0.7 + Math.random() * 0.6);
+    lancar();
+  }
+}
+
+/* ---------- Jogador ---------- */
+function movePlayer(dt) {
+  let dir = 0;
+  if (keys.ArrowLeft || keys.a || keys.A) dir -= 1;
+  if (keys.ArrowRight || keys.d || keys.D) dir += 1;
+  if (dir !== 0) targetX = null;
+
+  if (targetX !== null) {
+    const step = clamp(targetX - player.x, -player.speed * dt, player.speed * dt);
+    player.x += step;
+  } else {
+    player.x += dir * player.speed * dt;
+  }
+  player.x = clamp(player.x, player.w / 2, W - player.w / 2);
+}
+
+/* ---------- Itens em queda ---------- */
+function coletar(it) {
+  if (it.tipo === 'lixo') {
+    score += 10;
+    pollution = Math.max(0, pollution - 4);
+    addFloat(`+10 ${it.dados.icon}`, player.x, player.y - 40, '#2e7d32');
+  } else if (it.tipo === 'bonus') {
+    aplicarBonus(it.dados);
+  } else {
+    openQuiz();
+  }
+}
+
+function perder(it) {
+  if (it.tipo === 'lixo') {
+    addPollution(8);
+    addFloat('sujou!', it.x, GROUND - 14, '#c62828');
+  }
+}
+
+function updateItems(dt) {
+  const slow = effects.lento > 0 ? 0.5 : 1;
+  for (const it of items) {
+    it.y += it.vy * slow * dt;
+    if (effects.ima > 0 && Math.abs(it.x - player.x) < 220) {
+      it.x += clamp(player.x - it.x, -260 * dt, 260 * dt);
+    }
+  }
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    const caught = Math.abs(it.x - player.x) < player.w / 2 &&
+                   it.y > player.y - 14 && it.y < player.y + player.h;
+    if (caught) {
+      items.splice(i, 1);
+      coletar(it);
+      if (state !== 'playing') break;
+      continue;
+    }
+    if (it.y > GROUND) {
+      items.splice(i, 1);
+      perder(it);
+      if (state !== 'playing') break;
+    }
+  }
+}
+
+/* ---------- Atualização geral ---------- */
+function update(dt) {
+  if (state === 'playing') {
+    time += dt;
+    for (const k of ['ima', 'lento']) {
+      if (effects[k] > 0) effects[k] = Math.max(0, effects[k] - dt);
+    }
+    movePlayer(dt);
+    updateNPC(dt);
+    updateItems(dt);
+
+    const novaCena = Math.min(SCENES.length - 1, Math.floor(score / 150));
+    if (novaCena !== sceneIdx) {
+      sceneIdx = novaCena;
+      showBanner('🌿 Nova cena: ' + SCENES[sceneIdx].nome);
+    }
+  }
+  for (const f of floats) { f.y -= 40 * dt; f.t -= dt; }
+  floats = floats.filter(f => f.t > 0);
+  if (banner.t > 0) banner.t -= dt;
+}
+
+/* ---------- Desenho cenários ---------- */
+function sol(x, y, cor) {
+  ctx.fillStyle = cor;
+  ctx.beginPath(); ctx.arc(x, y, 40, 0, Math.PI * 2); ctx.fill();
+}
+
+function tree(x, base, s = 1) {
+  ctx.fillStyle = '#795548';
+  ctx.fillRect(x - 6 * s, base - 50 * s, 12 * s, 50 * s);
+  ctx.fillStyle = '#2e7d32';
+  ctx.beginPath(); ctx.arc(x, base - 65 * s, 35 * s, 0, Math.PI * 2); ctx.fill();
+}
+
+function predio(x, w, h) {
+  ctx.fillStyle = '#607d8b';
+  ctx.fillRect(x, GROUND - h, w, h);
+  ctx.fillStyle = '#ffe082';
+  for (let yy = GROUND - h + 12; yy < GROUND - 12; yy += 24)
+    for (let xx = x + 8; xx < x + w - 12; xx += 20)
+      ctx.fillRect(xx, yy, 8, 10);
+  ctx.fillStyle = '#43a047';
+  ctx.fillRect(x, GROUND - h - 6, w, 6);
+}
+
+function drawScene(i) {
+  if (i === 0) {
+    sol(720, 70, '#ffeb3b');
+    [120, 330, 560, 740].forEach(x => tree(x, GROUND));
+  } else if (i === 1) {
+    ctx.fillStyle = '#4a7fa3';
+    ctx.fillRect(0, 300, W, GROUND - 300);
+    ctx.fillStyle = 'rgba(40,40,40,.45)';
+    [[150, 330, 90, 20], [420, 350, 130, 24], [640, 320, 110, 18]].forEach(([x, y, w, h]) => {
+      ctx.beginPath(); ctx.ellipse(x, y, w, h, 0, 0, Math.PI * 2); ctx.fill();
+    });
+    ctx.fillStyle = '#607d8b';
+    ctx.fillRect(580, 180, 70, 120);
+    ctx.fillRect(660, 200, 50, 100);
+    ctx.fillStyle = 'rgba(90,90,90,.7)';
+    for (let k = 0; k < 3; k++) {
+      ctx.beginPath(); ctx.arc(600 + k * 12, 150 - k * 18, 16 + k * 4, 0, Math.PI * 2); ctx.fill();
+    }
+  } else if (i === 2) {
+    sol(90, 70, '#ffca28');
+    ctx.fillStyle = '#2fa7d9';
+    ctx.fillRect(0, 300, W, 40);
+    ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 2;
+    for (let x = 0; x < W; x += 60) {
+      ctx.beginPath(); ctx.arc(x, 320, 20, Math.PI * 0.1, Math.PI * 0.9); ctx.stroke();
+    }
+    ctx.lineWidth = 1;
+  } else if (i === 3) {
+    [60, 220, 380, 540, 700].forEach((x, k) => tree(x, GROUND, 1.2 + (k % 2) * 0.3));
+  } else {
+    [[40, 90, 160], [150, 70, 130], [280, 110, 200], [410, 80, 150], [530, 120, 190], [660, 90, 140]]
+      .forEach(([x, w, h]) => predio(x, w, h));
+  }
+}
+
+/* ---------- Desenho personagens e itens ---------- */
+function drawNPC() {
+  const x = npc.x, y = 60;
+  ctx.fillStyle = '#455a64';
+  ctx.fillRect(x - 16, y + 18, 32, 40);
+  ctx.fillStyle = '#f1c27d';
+  ctx.beginPath(); ctx.arc(x, y, 16, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#b71c1c';
+  ctx.fillRect(x - 16, y - 18, 32, 8);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(x - 7, y - 2, 4, 4);
+  ctx.fillRect(x + 3, y - 2, 4, 4);
+
+  const up = npc.throwAnim > 0 ? -30 : 10;
+  ctx.strokeStyle = '#455a64'; ctx.lineWidth = 8;
+  ctx.beginPath(); ctx.moveTo(x + 14, y + 26); ctx.lineTo(x + 40, y + 26 + up); ctx.stroke();
+  ctx.lineWidth = 1;
+
+  ctx.font = '28px serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('🗑️', x - 36, y + 46);
+  ctx.font = '16px Arial';
+  ctx.fillStyle = '#fff';
+  ctx.fillText('Poluidor', x, y - 30);
+}
+
+function drawPlayer() {
+  const x = player.x, y = player.y;
+  if (effects.ima > 0) {
+    ctx.fillStyle = 'rgba(255,215,0,.08)';
+    ctx.beginPath(); ctx.arc(x, y, 220, 0, Math.PI * 2); ctx.fill();
+  }
+  if (shield) {
+    ctx.strokeStyle = '#4caf50'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(x, y - 14, 44, 0, Math.PI * 2); ctx.stroke();
+    ctx.lineWidth = 1;
+  }
+  // cesto
+  ctx.fillStyle = '#8d6e63';
+  ctx.beginPath();
+  ctx.moveTo(x - player.w / 2, y);
+  ctx.lineTo(x + player.w / 2, y);
+  ctx.lineTo(x + player.w / 2 - 10, y + player.h);
+  ctx.lineTo(x - player.w / 2 + 10, y + player.h);
+  ctx.closePath(); ctx.fill();
+  // herói
+  ctx.fillStyle = '#ffcc80';
+  ctx.beginPath(); ctx.arc(x, y - 22, 14, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#2e7d32';
+  ctx.fillRect(x - 15, y - 40, 30, 8);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(x - 6, y - 24, 3, 3);
+  ctx.fillRect(x + 3, y - 24, 3, 3);
+  ctx.font = '14px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#fff';
+  ctx.fillText('Eco-herói', x, y + player.h + 14);
+}
+
+function carta(x, y, cor, txt, fonte) {
+  ctx.fillStyle = cor;
+  ctx.fillRect(x - 18, y - 24, 36, 48);
+  ctx.strokeStyle = '#333'; ctx.lineWidth = 2;
+  ctx.strokeRect(x - 18, y - 24, 36, 48);
+  ctx.lineWidth = 1;
+  ctx.fillStyle = '#222';
+  ctx.font = fonte; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(txt, x, y);
+}
+
+function drawItem(it) {
+  const x = it.x + Math.sin(time * 4 + it.wob) * 2, y = it.y;
+  if (it.tipo === 'lixo') {
+    ctx.font = '30px serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(it.dados.icon, x, y);
+  } else if (it.tipo === 'bonus') {
+    carta(x, y, '#fff176', it.dados.icon, '20px Arial');
+  } else {
+    carta(x, y, '#e1bee7', '?', 'bold 24px Arial');
+  }
+}
+
+function drawFloat(f) {
+  ctx.globalAlpha = Math.max(0, f.t);
+  ctx.fillStyle = f.color;
+  ctx.font = 'bold 18px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(f.text, f.x, f.y);
+  ctx.globalAlpha = 1;
+}
+
+/* ---------- HUD ---------- */
+function drawHUD() {
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = 'rgba(0,0,0,.45)';
+  ctx.fillRect(8, 8, 230, 74);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 18px Arial';
+  ctx.fillText(`Pontos: ${score}`, 18, 34);
+  ctx.fillText(`Vidas: ${'❤️'.repeat(Math.max(0, lives))}`, 18, 58);
+  ctx.font = '14px Arial';
+  ctx.fillText(`🌿 ${SCENES[sceneIdx].nome}`, 18, 76);
+
+  const bx = W - 208, by = 12;
+  ctx.fillStyle = 'rgba(0,0,0,.45)';
+  ctx.fillRect(bx - 10, by - 6, 198, 44);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 14px Arial';
+  ctx.fillText('Poluição', bx, by + 10);
+  ctx.fillStyle = '#555';
+  ctx.fillRect(bx, by + 18, 170, 14);
+  ctx.fillStyle = pollution > 70 ? '#c62828' : pollution > 40 ? '#fbc02d' : '#43a047';
+  ctx.fillRect(bx, by + 18, 170 * pollution / 100, 14);
+
+  let y = by + 56;
+  ctx.fillStyle = '#fff';
+  ctx.font = '14px Arial';
+  if (shield) { ctx.fillText('🛡️ Escudo ativo', bx, y); y += 18; }
+  if (effects.ima > 0) { ctx.fillText(`🧲 Ímã: ${Math.ceil(effects.ima)} s`, bx, y); y += 18; }
+  if (effects.lento > 0) { ctx.fillText(`🌧️ Chuva suave: ${Math.ceil(effects.lento)} s`, bx, y); }
+}
+
+function drawBanner() {
+  if (banner.t <= 0) return;
+  ctx.globalAlpha = Math.min(1, banner.t);
+  ctx.fillStyle = 'rgba(0,0,0,.6)';
+  ctx.fillRect(W / 2 - 260, H / 2 - 120, 520, 44);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 20px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(banner.text, W / 2, H / 2 - 98);
+  ctx.globalAlpha = 1;
+}
+
+function drawPaused() {
+  ctx.fillStyle = 'rgba(0,0,0,.5)';
+  ctx.fillRect(0, 0, W, H);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 36px Arial'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('⏸ PAUSADO (P para continuar)', W / 2, H / 2);
+}
+
+/* ---------- Render principal ---------- */
+function draw() {
+  const s = SCENES[sceneIdx];
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = s.sky;
+  ctx.fillRect(0, 0, W, H);
+  drawScene(sceneIdx);
+  ctx.fillStyle = s.ground;
+  ctx.fillRect(0, GROUND, W, H - GROUND);
+
+  drawNPC();
+  items.forEach(drawItem);
+  drawPlayer();
+  floats.forEach(drawFloat);
+  drawHUD();
+  drawBanner();
+  if (state === 'paused') drawPaused();
+}
+
+/* ---------- Entrada ---------- */
+addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (['ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') targetX = null;
+  if (e.key === 'p' || e.key === 'P') {
+    if (state === 'playing') state = 'paused';
+    else if (state === 'paused') state = 'playing';
+  }
+});
+addEventListener('keyup', e => { keys[e.key] = false; });
+
+function posX(e) {
+  const r = canvas.getBoundingClientRect();
+  return (e.clientX - r.left) * (W / r.width);
+}
+canvas.addEventListener('pointerdown', e => { if (state === 'playing') targetX = posX(e); });
+canvas.addEventListener('pointermove', e => { if (state === 'playing') targetX = posX(e); });
+
+$('startBtn').onclick = startGame;
+$('restartBtn').onclick = startGame;
+
+/* ---------- Loop ---------- */
+function frame(ts) {
+  const dt = Math.min(0.05, (ts - (lastTime || ts)) / 1000);
+  lastTime = ts;
+  update(dt);
+  draw();
+  requestAnimationFrame(frame);
+}
+
+init();
+state = 'menu';
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
